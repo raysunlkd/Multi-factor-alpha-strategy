@@ -1,0 +1,345 @@
+---
+title: "Multifactor_comp_singletest"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(data.table)
+library(ggplot2)
+setwd('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project1\\code')
+```
+# Multi-factor model setting-up.
+
+## Data read
+Our data is daliy based.
+```{r}
+Data<-read.csv('Data_for_R.csv',header=TRUE,encoding = 'UTF-8')
+Data<-data.table(Data)
+			
+```
+
+## Variable setting
+
+We use {'vol','amount','OBV','float_share','total_mv','MOM','APO','ROC','RSI','vol_volatility_1w','vol_volatility_2w','vol_volatility_1m','volatility_1w','volatility_2w','volatility_1m','pe','pb','ps','dv_ratio','volume_ratio','turnover_rate'} as our alphas.
+Totally 21 alpha.
+```{r }
+Data = melt(Data, id.vars = c('trade_date','ts_code','sector', 'weight', 'pct_chg'), 
+			measure.vars = c('vol','amount','OBV', 'float_share', 'total_mv',
+			                 'MOM','APO','ROC','RSI','vol_volatility_1w','vol_volatility_2w','vol_volatility_1m',
+			                 'volatility_1w','volatility_2w','volatility_1m',
+			                 'pe','pb','ps','dv_ratio',
+			                 'volume_ratio','turnover_rate'))
+print(Data)
+```
+
+## standrize alpha
+```{r}
+Data[, ':=' (S1 = (value - mean(value, na.rm=T))/sd(value, na.rm=T),
+             S2 = (value - median(value, na.rm=T))/median(abs(value-median(value, na.rm=T)), na.rm=T),
+             S3 = frankv(value, ties.method='average', na.last='keep', order = 1)), by=.(trade_date, variable)]
+Data[, S3 := S3/max(S3, na.rm=T), by=.(trade_date, variable)]
+print(Data)
+```
+
+## Define alphas we use and compute the 5 kinds of composited alpha and their composition.
+
+```{r}
+dat = dcast(Data, trade_date+ts_code+sector+weight+pct_chg~variable, value.var = 'S3')
+
+dat[, ':=' (Comp_Value = (ifelse(is.na(pe), 0, pe) + ifelse(is.na(pb), 0, pb)+
+                            ifelse(is.na(ps), 0, ps)+ifelse(is.na(dv_ratio), 0, dv_ratio)) 
+  / ifelse( is.na(dv_ratio)&is.na(ps)&is.na(pe)&is.na(pb), NA, (ifelse(is.na(ps), 0, 1)+ifelse(is.na(dv_ratio), 0, 1)+ifelse(is.na(pe), 0, 1) + ifelse(is.na(pb), 0, 1)) ),
+  Comp_turnover = (ifelse(is.na(turnover_rate), 0, turnover_rate) + ifelse(is.na(volume_ratio), 0, volume_ratio)) 
+  / ifelse( is.na(turnover_rate)&is.na(volume_ratio), NA, (ifelse(is.na(turnover_rate), 0, 1) + ifelse(is.na(volume_ratio), 0, 1)) ),
+  Comp_cap = (ifelse(is.na(float_share), 0, float_share) + ifelse(is.na(total_mv), 0, total_mv)
+              +ifelse(is.na(vol), 0, vol)+ifelse(is.na(amount), 0, amount)+ifelse(is.na(OBV), 0, OBV)) 
+  / ifelse( is.na(OBV)&is.na(amount)&is.na(vol)&is.na(float_share)&is.na(total_mv), NA, (ifelse(is.na(float_share), 0, 1) + ifelse(is.na(total_mv), 0, 1)
+                                                                                         +ifelse(is.na(vol), 0, 1)+ifelse(is.na(amount), 0, 1)+ifelse(is.na(OBV), 0, 1)) ),
+  Comp_mom=(ifelse(is.na(MOM), 0, MOM) + ifelse(is.na(APO), 0, APO)+ifelse(is.na(vol_volatility_2w), 0, vol_volatility_2w) + ifelse(is.na(vol_volatility_1m), 0, vol_volatility_1m)
+            +ifelse(is.na(ROC), 0, ROC)+ifelse(is.na(RSI), 0, RSI)+ifelse(is.na(vol_volatility_1w), 0, vol_volatility_1w)) 
+  / ifelse( is.na(vol_volatility_1m)&is.na(vol_volatility_2w)&is.na(vol_volatility_1w)&is.na(RSI)&is.na(ROC)&is.na(MOM)&is.na(APO), NA, (ifelse(is.na(MOM), 0, 1) + ifelse(is.na(APO), 0, 1)
+                                                                                         +ifelse(is.na(ROC), 0, 1)+ifelse(is.na(RSI), 0, 1)+ifelse(is.na(vol_volatility_1w), 0, 1)+
+                                                                                           ifelse(is.na(vol_volatility_2w), 0, 1) + ifelse(is.na(vol_volatility_1m), 0, 1)) ),
+  Comp_vol=(ifelse(is.na(volatility_1w), 0, volatility_1w) + ifelse(is.na(volatility_2w), 0, volatility_2w)+
+              ifelse(is.na(volatility_1m), 0, volatility_1m)+ifelse(is.na(dv_ratio), 0, dv_ratio)) 
+  / ifelse( is.na(volatility_1m)&is.na(volatility_1w)&is.na(volatility_2w), NA, (ifelse(is.na(volatility_1m), 0, 1)+ifelse(is.na(volatility_1w), 0, 1) + ifelse(is.na(volatility_2w), 0, 1)) ))]
+dat[, Comp := Comp_Value + Comp_turnover + Comp_cap+Comp_mom+Comp_vol]
+print(dat)
+```
+## Assgin basket
+```{r}
+fractile <- function(x, n) {
+  if (sum(!is.na(x)) < n) { return(rep(1L*NA, length(x))) }
+  rnk = rank(x, ties.method='first', na.last='keep')
+  qnt = quantile(rnk, probs=seq(0, 1, length.out=n+1), na.rm=T, names=F)
+  cut(rnk, breaks=qnt, include.lowest=T, labels=F, right=F)
+}
+
+NoBas = 3
+dat[, Basket := fractile(Comp, NoBas), by=trade_date]
+```
+
+## Turnover & Transaction cost
+```{r}
+dat1 = dat[Basket==3, ]
+dat1[, WGT1:=0]
+dat1[Basket==3, WGT1:=weight]
+dat1[, WGT1 := WGT1/sum(WGT1), by=trade_date]
+dat1[is.na(pct_chg), pct_chg:=0]
+dat1[, WGT11 := WGT1*(1+pct_chg)]
+dat1[, WGT11 := WGT11/sum(WGT11), by=trade_date]
+
+Wgt1 = as.data.frame(dcast(dat1, ts_code~trade_date, value.var = 'WGT11'))
+Wgt2 = as.data.frame(dcast(dat1, ts_code~trade_date, value.var = 'WGT1'))
+
+WgtChg = sapply(2:(ncol(Wgt1)-1), function(i) {
+          ifelse(is.na(Wgt2[, i+1]), 0, Wgt2[, i+1]) - ifelse(is.na(Wgt1[, i]), 0, Wgt1[, i])
+		  })
+colnames(WgtChg) = colnames(Wgt2)[-(1:2)]		  
+WgtChg = as.data.table(WgtChg)
+WgtChg[, ts_code := Wgt2$ts_code]
+WgtChg = melt(WgtChg, id.var = 'ts_code')
+setnames(WgtChg, old = c('variable', 'value'), new = c('trade_date', 'Turnover'))
+WgtChg[, TCost:=ifelse(Turnover>0, Turnover*0.005, -Turnover*0.006)]
+print(WgtChg)
+Turnover = WgtChg[, sum(abs(Turnover)), by=trade_date]
+print(Turnover)
+
+Turnover[, mean(V1)]
+
+dat1[, trade_date:=as.character(trade_date)]
+setkey(dat1, trade_date, ts_code)
+setkey(WgtChg, trade_date, ts_code)
+dat1 = WgtChg[dat1]
+
+Perf = dat1[, .(Pre_cost = sum(weight*pct_chg), 
+Post_cost = sum(weight*pct_chg)-sum(TCost, na.rm=T)), by=trade_date]
+Perf[, .(mean(Pre_cost)*12, mean(Post_cost)*12)]
+
+
+```
+```{r}
+p = ggplot(data = WgtChg, aes(x = trade_date, y = Turnover)) 
+p = p + geom_line()+  scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+p = ggplot(data = WgtChg, aes(x = trade_date, y = TCost)) 
+p = p + geom_line()+  scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+```
+
+
+# single factor test for composited factor
+
+## Calculate performance
+```{r}
+Perf = dat[, sum(weight*pct_chg, na.rm=T)/sum(ifelse(is.na(pct_chg), 0, weight)), by = .(trade_date, Basket)]
+#Perf
+
+BMPerf = dat[, sum(weight*pct_chg, na.rm=T)/sum(ifelse(is.na(pct_chg), 0, weight)), by = trade_date]
+setnames(BMPerf, c('trade_date', 'BM'))
+#BMPerf
+
+setkey(BMPerf, trade_date)
+setkey(Perf, trade_date)
+Perf = BMPerf[Perf]
+#Perf
+
+Perf[, RelRtn := V1-BM]
+#Perf
+Perf = dcast(Perf, trade_date~Basket, value.var = 'RelRtn')
+#Perf
+
+setnames(Perf, c('trade_date','NoData', 'Low', 'Mid', 'High'))
+Perf[, LS:=High-Low]
+
+Perf = melt(Perf, id.vars = 'trade_date')
+print(Perf)
+
+ExRtn = Perf[, 12*mean(value, na.rm=T), by=variable]
+RskAdjRtn = Perf[, sqrt(12)*mean(value, na.rm=T)/sd(value, na.rm=T), by=variable]
+print(ExRtn)
+print(RskAdjRtn)
+
+```
+
+## Plot cumulative performance
+
+```{r}
+setorder(Perf, trade_date)			 
+CumP = Perf[, .(DT = trade_date, CumPerf = cumsum(value)), by=variable]
+CumP = CumP[!is.na(CumPerf), ]
+setnames(CumP, c('Basket', 'Date', 'Cum.Perf'))
+CumP
+
+p = ggplot(data = CumP[Basket %in% c('Low', 'Mid', 'High')], aes(x = Date, y = Cum.Perf)) 
+p = p + geom_line(aes(group=Basket, color = Basket), size = 1)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+
+p = ggplot(data = CumP[Basket =='LS'], aes(x = Date, y = Cum.Perf)) 
+p = p + geom_line(aes(group=Basket, color = Basket),size = 1)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+```
+
+## IC
+```{r}
+  IC = dat[, cor(pct_chg, Comp, method = 'spearman', use = 'pairwise.complete.obs'), by=trade_date]
+  IC[, mean(V1, na.rm=T)]
+  setnames(IC, c('Date', 'Info.Coef'))
+  #p = ggplot(data = IC, aes(x=Date, y = Info.Coef)) + geom_bar(stat='identity', position="dodge")
+  p = ggplot(data = IC, aes(x=Date, y = Info.Coef)) + geom_bar(stat='identity')+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+  p = p + theme_bw(base_family = 'Times')
+  print(p)
+```
+
+
+## Hitrate
+```{r}
+setkey(Data, trade_date)
+setkey(BMPerf, trade_date)
+dat = BMPerf[dat]
+dat
+HR = dat[, sum(pct_chg>BM, na.rm=T)/sum(!is.na(pct_chg)), by=.(trade_date, Basket)]
+HR_avg = HR[, mean(V1, na.rm=T), by=Basket]
+setorder(HR_avg, Basket)
+HR_avg
+
+HR[, HitRate := V1-0.5]
+p = ggplot(data = HR[!is.na(Basket)], aes(x = trade_date, y = HitRate)) + geom_bar(stat = 'identity') 
+p = p + facet_wrap(~Basket, nrow=1) + theme_bw(base_family = 'Times')
+print(p)
+```
+
+
+
+
+
+
+## Turnover
+```{r}
+Turnover = function(Data)
+{
+  setorder(Data, trade_date)
+  Mth = Data[, unique(trade_date)]
+  sapply(2:length(Mth), function(m){
+    Basket1 = Data[trade_date==Mth[m-1], unique(ts_code)]
+    Basket2 = Data[trade_date==Mth[m], unique(ts_code)]
+    length(setdiff(Basket1, Basket2))/length(Basket1)
+  })
+  
+}
+
+TO_Long = Turnover(dat[Basket==3, ])
+TO_Short = Turnover(dat[Basket==1, ])
+#print(TO_Long)
+#print(TO_Short)
+print(mean(TO_Long))
+print(mean(TO_Short))
+
+```
+```{r}
+Mth=Data[, unique(trade_date)]
+ll=data.frame(Mth[2:length(Mth)],TO_Long)
+colnames(ll)=c('date','Turover_to_Long')
+ss=data.frame(Mth[2:length(Mth)],TO_Short)
+colnames(ss)=c('date','Turover_to_Short')
+p = ggplot(data = ll, aes(x = date, y = Turover_to_Long)) 
+p = p + geom_bar(aes(), stat = 'identity', position='stack', size = 1)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+
+
+p = ggplot(data = ss, aes(x = date, y = Turover_to_Short)) 
+p = p + geom_bar(aes(), stat = 'identity', position='stack', size = 1)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+
+```
+
+
+
+
+## Sector tiltp
+```{r}
+SctWgt_BM = dat[, .(BM=sum(weight, na.rm=T)), by=.(trade_date, sector)]
+SctWgt_L = dat[Basket==3, .(Long=sum(weight, na.rm=T)), by=.(trade_date, sector)]
+SctWgt_S = dat[Basket==1, .(Short=sum(weight, na.rm=T)), by=.(trade_date, sector)]
+SctWgt_L[, Long := Long/sum(Long), by=trade_date]
+SctWgt_S[, Short := Short/sum(Short), by=trade_date]
+
+setkey(SctWgt_BM, trade_date, sector)
+setkey(SctWgt_L, trade_date, sector)
+SctWgt = SctWgt_L[SctWgt_BM]
+
+setkey(SctWgt, trade_date, sector)
+setkey(SctWgt_S, trade_date, sector)
+SctWgt = SctWgt_S[SctWgt]
+SctWgt = SctWgt[!is.na(sector), ]
+SctWgt[, ':=' (Long_rel = Long-BM, Short_rel = Short-BM)]
+
+SctWgt
+SctWgt1 = melt(SctWgt, id.vars = c('trade_date', 'sector'), measure.vars = c('Long_rel', 'Short_rel'))
+setnames(SctWgt1, old = c('variable', 'value'), new = c('Basket', 'Relative.Wgt'))
+
+p = ggplot(data = SctWgt1, aes(x=trade_date, y = ))
+
+p = ggplot(data = SctWgt1, aes(x = trade_date, y = Relative.Wgt)) 
+p = p + geom_bar(aes(fill = sector), stat = 'identity', position='stack', size = 1) + facet_wrap(~Basket, nrow=2)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+```
+
+
+
+## Sector neutral strategy
+```{r}
+dat[, Basket1 := fractile(Comp, NoBas), by=.(sector, trade_date)]
+Perf_s = dat[, .(Perf = sum(weight*pct_chg, na.rm=T)/sum(ifelse(is.na(pct_chg), 0, weight))), 
+					by = .(trade_date, Basket1, sector)]
+
+setkey(Perf_s, trade_date, sector)
+setkey(SctWgt_BM, trade_date, sector)
+Perf_s = SctWgt_BM[Perf_s]
+Perf_s = Perf_s[!is.na(sector), ]
+
+Perf2 = Perf_s[, sum(Perf*BM, na.rm=T)/sum(ifelse(is.na(Perf), 0, BM)), by=.(trade_date, Basket1)]
+
+setkey(BMPerf, trade_date)
+setkey(Perf2, trade_date)
+Perf2 = BMPerf[Perf2]
+Perf2[, RelRtn := V1-BM]
+Perf2 = dcast(Perf2, trade_date~Basket1, value.var = 'RelRtn')
+print(Perf2)
+setnames(Perf2, c('trade_date','NoData' ,'Low', 'Mid', 'High'))
+Perf2[, LS:=High-Low]
+Perf2 = melt(Perf2, id.vars = 'trade_date')
+
+ExRtn2 = Perf2[, 12*mean(value, na.rm=T), by=variable]
+RskAdjRtn2 = Perf2[, sqrt(12)*mean(value, na.rm=T)/sd(value, na.rm=T), by=variable]
+print(data.frame(ExRtn, ExRtn2))
+print(data.frame(RskAdjRtn, RskAdjRtn2))
+
+
+######## Plot cumulative performance
+setorder(Perf2, trade_date)			 
+CumP2 = Perf2[, .(DT = trade_date, CumPerf = cumsum(value)), by=variable]
+CumP2 = CumP2[!is.na(CumPerf), ]
+setnames(CumP2, c('Basket', 'Date', 'Cum.Perf'))
+
+CumP[, Strategy:='Non Sector Neutral']
+CumP2[, Strategy:='Sector Neutral']
+CumP = rbind(CumP, CumP2)
+CumP
+
+p = ggplot(data = CumP[Basket == 'LS',], aes(x = Date, y = Cum.Perf)) 
+p = p + geom_line(aes(group=Strategy, color = Strategy), size = 1)+scale_x_discrete(breaks = c('2014-01-30','2015-01-30','2016-01-29','2017-01-26','2018-01-30','2019-01-30'))
+p = p + theme_bw(base_family = 'Times')
+print(p)
+
+############## 
+
+```
+
